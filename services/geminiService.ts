@@ -33,16 +33,16 @@ Keep answers concise (under 3 sentences unless detailed explanation is needed).
 
 export const sendMessageToGemini = async (userMessage: string): Promise<string> => {
   try {
-    // NOTE: In a real production app, you might proxy this through a backend to hide the key.
-    // For a static site/demo, we assume the environment variable is present or the user enters it.
-    // Since this is a generated code response, we assume process.env.API_KEY is available.
-    // Ideally, for a client-side only app, you might prompt the user for a key if it's missing.
-    
-    if (!process.env.API_KEY) {
-        return "System Message: API Key is missing in the environment configuration. Please configure the REACT_APP_API_KEY or process.env.API_KEY.";
+    // Check if process is defined to prevent browser crash
+    // In Vite/Browser, process might not exist unless defined in config.
+    const apiKey = typeof process !== 'undefined' && process.env ? process.env.API_KEY : undefined;
+
+    if (!apiKey) {
+        console.warn("API Key missing");
+        return "I'm currently in 'Offline Mode' (API Key missing). As a demo, I can tell you that Hasan is a Technical Artist specializing in Unreal Engine, Python, and Rigging.";
     }
 
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    const ai = new GoogleGenAI({ apiKey: apiKey });
     
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash',
