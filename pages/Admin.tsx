@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react';
+import JSZip from 'jszip';
+import { saveAs } from 'file-saver';
 import { PERSONAL_INFO, PROJECTS, WORK_EXPERIENCE, CODING_SKILLS, SOFTWARE_SKILLS } from '../constants';
 import { Project, ProjectCategory, Experience } from '../types';
-import { Save, Plus, Trash2, Copy, Check, Lock, Code, Briefcase } from 'lucide-react';
+import { Save, Plus, Trash2, Copy, Check, Lock, Code, Briefcase, Upload, Download, Image as ImageIcon } from 'lucide-react';
 
 const Admin: React.FC = () => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -12,10 +14,15 @@ const Admin: React.FC = () => {
   const [experiences, setExperiences] = useState<Experience[]>(WORK_EXPERIENCE);
   const [info, setInfo] = useState(PERSONAL_INFO);
 
+  // File States for Uploads
+  const [thumbnailFiles, setThumbnailFiles] = useState<Record<string, File>>({});
+  const [galleryFiles, setGalleryFiles] = useState<Record<string, File[]>>({});
+
   // UI States
   const [activeTab, setActiveTab] = useState<'projects' | 'experience' | 'info'>('projects');
   const [generatedCode, setGeneratedCode] = useState('');
   const [copied, setCopied] = useState(false);
+  const [isPackaging, setIsPackaging] = useState(false);
 
   // Load data initially
   useEffect(() => {
@@ -24,8 +31,6 @@ const Admin: React.FC = () => {
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
-    // Simple client-side check. 
-    // Since this doesn't protect a database, a hardcoded string is fine for a static generator.
     if (password === 'artist123') {
       setIsAuthenticated(true);
     } else {
@@ -33,8 +38,8 @@ const Admin: React.FC = () => {
     }
   };
 
-  const generateConstantsFile = () => {
-    const code = `import { Project, ProjectCategory, Experience, Skill } from './types';
+  const generateConstantsCode = (updatedProjects: Project[]) => {
+    return `import { Project, ProjectCategory, Experience, Skill } from './types';
 
 // --- PERSONAL INFO ---
 export const PERSONAL_INFO = ${JSON.stringify(info, null, 2)};
@@ -48,10 +53,66 @@ export const CODING_SKILLS: Skill[] = ${JSON.stringify(CODING_SKILLS, null, 2)};
 export const WORK_EXPERIENCE: Experience[] = ${JSON.stringify(experiences, null, 2)};
 
 // --- PROJECTS ---
-// NOTE: Replace the image URLs with your actual local assets or hosted images.
-export const PROJECTS: Project[] = ${JSON.stringify(projects, null, 2)};
+export const PROJECTS: Project[] = ${JSON.stringify(updatedProjects, null, 2)};
 `;
-    setGeneratedCode(code);
+  };
+
+  const handleDownloadPackage = async () => {
+    setIsPackaging(true);
+    try {
+      const zip = new JSZip();
+      const imgFolder = zip.folder("images");
+      const projectsFolder = imgFolder?.folder("projects");
+
+      // Clone projects to modify paths without affecting state immediately
+      const updatedProjects = JSON.parse(JSON.stringify(projects));
+
+      // Process Thumbnails
+      for (let i = 0; i < updatedProjects.length; i++) {
+        const p = updatedProjects[i];
+        const file = thumbnailFiles[p.id];
+        
+        if (file && projectsFolder) {
+          const ext = file.name.split('.').pop();
+          const filename = `${p.id}-thumb.${ext}`;
+          projectsFolder.file(filename, file);
+          p.thumbnail = `/images/projects/${filename}`; // Update path to local
+        }
+      }
+
+      // Process Gallery Images
+      for (const [projectId, files] of Object.entries(galleryFiles)) {
+        const projectIndex = updatedProjects.findIndex((p: Project) => p.id === projectId);
+        if (projectIndex !== -1 && projectsFolder) {
+           const p = updatedProjects[projectIndex];
+           if (!p.images) p.images = [];
+           
+           files.forEach((file, idx) => {
+             const ext = file.name.split('.').pop();
+             const filename = `${p.id}-gallery-${Date.now()}-${idx}.${ext}`;
+             projectsFolder.file(filename, file);
+             p.images.push(`/images/projects/${filename}`);
+           });
+        }
+      }
+
+      // Generate Code
+      const code = generateConstantsCode(updatedProjects);
+      zip.file("constants.ts", code);
+
+      // Generate Zip
+      const content = await zip.generateAsync({ type: "blob" });
+      saveAs(content, "portfolio-update.zip");
+      
+      setGeneratedCode(code); // Show code in UI as well
+      alert("Package downloaded! \n1. Extract 'images' folder to your 'public' directory.\n2. Replace 'constants.ts' with the one in the zip.");
+      
+    } catch (error) {
+      console.error("Error creating package:", error);
+      alert("Failed to create package.");
+    } finally {
+      setIsPackaging(false);
+    }
   };
 
   const copyToClipboard = () => {
@@ -92,6 +153,26 @@ export const PROJECTS: Project[] = ${JSON.stringify(projects, null, 2)};
   const deleteProject = (id: string) => {
     if (window.confirm('Delete this project?')) {
       setProjects(projects.filter(p => p.id !== id));
+    }
+  };
+
+  // File Handlers
+  const handleThumbnailSelect = (projectId: string, e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      setThumbnailFiles({
+        ...thumbnailFiles,
+        [projectId]: e.target.files[0]
+      });
+    }
+  };
+
+  const handleGallerySelect = (projectId: string, e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files) {
+      const newFiles = Array.from(e.target.files);
+      setGalleryFiles({
+        ...galleryFiles,
+        [projectId]: [...(galleryFiles[projectId] || []), ...newFiles]
+      });
     }
   };
 
@@ -161,15 +242,18 @@ export const PROJECTS: Project[] = ${JSON.stringify(projects, null, 2)};
             <Code className="mr-3 text-tech-500" /> Content Editor
           </h1>
           <button
-            onClick={() => {
-              generateConstantsFile();
-              // Scroll to bottom
-              setTimeout(() => window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' }), 100);
-            }}
-            className="flex items-center px-6 py-3 bg-green-600 hover:bg-green-500 text-white rounded-lg font-bold shadow-lg transition-all"
+            onClick={handleDownloadPackage}
+            disabled={isPackaging}
+            className="flex items-center px-6 py-3 bg-green-600 hover:bg-green-500 text-white rounded-lg font-bold shadow-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            <Save className="w-5 h-5 mr-2" />
-            Generate Code
+            {isPackaging ? (
+              <>Packaging...</>
+            ) : (
+              <>
+                <Download className="w-5 h-5 mr-2" />
+                Download Update Package
+              </>
+            )}
           </button>
         </div>
 
@@ -220,16 +304,48 @@ export const PROJECTS: Project[] = ${JSON.stringify(projects, null, 2)};
                 <div className="grid grid-cols-1 md:grid-cols-12 gap-6">
                   {/* Thumbnail Preview */}
                   <div className="md:col-span-3">
-                    <div className="aspect-video bg-black rounded-lg overflow-hidden border border-white/5 mb-2">
-                      <img src={project.thumbnail} alt="preview" className="w-full h-full object-cover" />
+                    <div className="aspect-video bg-black rounded-lg overflow-hidden border border-white/5 mb-2 relative">
+                      {thumbnailFiles[project.id] ? (
+                        <img 
+                          src={URL.createObjectURL(thumbnailFiles[project.id])} 
+                          alt="preview" 
+                          className="w-full h-full object-cover" 
+                        />
+                      ) : (
+                        <img src={project.thumbnail} alt="preview" className="w-full h-full object-cover" />
+                      )}
                     </div>
-                    <label className="block text-xs font-mono text-gray-500 mb-1">Thumbnail URL</label>
-                    <input
-                      type="text"
-                      value={project.thumbnail}
-                      onChange={(e) => updateProject(project.id, 'thumbnail', e.target.value)}
-                      className="w-full bg-dark-900 border border-white/10 rounded px-2 py-1 text-xs text-gray-300 focus:border-tech-500 focus:outline-none"
-                    />
+                    
+                    <div className="space-y-2">
+                      <label className="block text-xs font-mono text-gray-500">Thumbnail Source</label>
+                      
+                      {/* File Upload */}
+                      <div className="relative">
+                        <input
+                          type="file"
+                          accept="image/*"
+                          onChange={(e) => handleThumbnailSelect(project.id, e)}
+                          className="hidden"
+                          id={`thumb-${project.id}`}
+                        />
+                        <label
+                          htmlFor={`thumb-${project.id}`}
+                          className="flex items-center justify-center w-full px-3 py-2 bg-dark-900 border border-white/10 rounded text-xs text-gray-300 hover:bg-dark-700 cursor-pointer transition-colors"
+                        >
+                          <Upload className="w-3 h-3 mr-2" />
+                          {thumbnailFiles[project.id] ? 'Change File' : 'Upload Image'}
+                        </label>
+                      </div>
+
+                      {/* URL Fallback */}
+                      <input
+                        type="text"
+                        value={project.thumbnail}
+                        onChange={(e) => updateProject(project.id, 'thumbnail', e.target.value)}
+                        placeholder="Or enter URL..."
+                        className="w-full bg-dark-900 border border-white/10 rounded px-2 py-1 text-xs text-gray-300 focus:border-tech-500 focus:outline-none"
+                      />
+                    </div>
                   </div>
 
                   {/* Fields */}
@@ -292,11 +408,14 @@ export const PROJECTS: Project[] = ${JSON.stringify(projects, null, 2)};
 
                     <div>
                       <label className="block text-sm font-medium text-gray-400 mb-2">
-                        Gallery Images (URLs)
+                        Gallery Images
                       </label>
-                      <div className="space-y-2">
+                      
+                      {/* Existing Images */}
+                      <div className="space-y-2 mb-4">
                         {(project.images || []).map((img, idx) => (
-                          <div key={idx} className="flex gap-2">
+                          <div key={idx} className="flex gap-2 items-center">
+                            <ImageIcon className="w-4 h-4 text-gray-500" />
                             <input
                               type="text"
                               value={img}
@@ -305,7 +424,6 @@ export const PROJECTS: Project[] = ${JSON.stringify(projects, null, 2)};
                                 newImages[idx] = e.target.value;
                                 updateProject(project.id, 'images', newImages);
                               }}
-                              placeholder="https://..."
                               className="flex-1 bg-dark-900 border border-white/10 rounded-lg px-3 py-2 text-white text-sm focus:border-tech-500 focus:outline-none"
                             />
                             <button
@@ -320,16 +438,38 @@ export const PROJECTS: Project[] = ${JSON.stringify(projects, null, 2)};
                             </button>
                           </div>
                         ))}
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const newImages = [...(project.images || []), ''];
-                            updateProject(project.id, 'images', newImages);
-                          }}
-                          className="w-full py-2 border border-dashed border-white/10 rounded-lg text-gray-400 hover:text-white hover:border-tech-500/50 text-sm transition-all"
-                        >
-                          + Add Image
-                        </button>
+                      </div>
+
+                      {/* Upload New Gallery Images */}
+                      <div className="border border-dashed border-white/10 rounded-lg p-4 bg-white/5">
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="text-sm text-gray-400">Add New Images</span>
+                          <input
+                            type="file"
+                            multiple
+                            accept="image/*"
+                            onChange={(e) => handleGallerySelect(project.id, e)}
+                            className="hidden"
+                            id={`gallery-${project.id}`}
+                          />
+                          <label
+                            htmlFor={`gallery-${project.id}`}
+                            className="px-3 py-1 bg-tech-600 hover:bg-tech-500 text-white text-xs rounded cursor-pointer transition-colors"
+                          >
+                            Select Files
+                          </label>
+                        </div>
+                        
+                        {galleryFiles[project.id] && galleryFiles[project.id].length > 0 && (
+                          <div className="space-y-1">
+                            {galleryFiles[project.id].map((file, idx) => (
+                              <div key={idx} className="text-xs text-gray-300 flex items-center">
+                                <Check className="w-3 h-3 text-green-500 mr-2" />
+                                {file.name}
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     </div>
 
@@ -511,8 +651,7 @@ export const PROJECTS: Project[] = ${JSON.stringify(projects, null, 2)};
               <div className="bg-yellow-900/20 p-4 border-t border-yellow-500/20 text-yellow-500 text-sm flex items-start">
                 <span className="mr-2">⚠️</span>
                 <p>
-                  <strong>INSTRUCTION:</strong> Copy the code above, open your project's <code>constants.ts</code> file,
-                  select everything inside it, and paste this code to overwrite it. Then deploy your site.
+                  <strong>INSTRUCTION:</strong> The code above is also included in the downloaded ZIP file.
                 </p>
               </div>
             </div>
